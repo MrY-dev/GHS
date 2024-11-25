@@ -89,7 +89,7 @@ int main(int argc, char **argv) {
         }
     }
     for (int i = 0; i < n; ++i) {
-        if (T(i) == 1) {
+        if (T(i) == 1 && V(i) > rank) {
             std::cout << "MST: " << rank << " " <<  V(i) << " " << W(i) << "\n";
         }
     }
