@@ -1,9 +1,11 @@
 CC = mpic++
-CCFLAGS = 
 
-ifeq ($(DEBUG),1)
-	CCFLAGS += -DDEBUG
-endif
+all : main
 
 main: main.cpp
-	$(CC) $(CCFLAGS) main.cpp -o main
+	$(CC) main.cpp -o main
+
+debug: main.cpp
+	$(CC) -DDEBUG main.cpp -o main
+
+
