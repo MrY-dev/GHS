@@ -1,8 +1,7 @@
 #include "headers.h"
-#include <mpi.h>
 
-double start_time;
-std::queue<std::pair<int, std::vector<int>>> Q;//waiting queue for messages to be dealt with later
+double start_time; // start time
+std::queue<std::vector<int>> Q;//waiting queue for messages to be dealt with later
 std::unordered_map<int,int> vertex_ind_map; // maps index in Edges to vertex
 
 int LN = 0; // level of fragment
@@ -12,13 +11,10 @@ int parent = 0; // node of in_branch
 int rank; // rank of the process also num_node
 int n;  // no of neighbours
 int best_w; // best min weight outgoing edge found till now
-int best_node;  // node corresponding best weight
+int best_node;  // node corresponding to best weight
 int rec; // no of received reports
-int test_node;  // node that is sent test to handle exception
+int test_node;  // node that is sent test 
 bool halt = false; // terminate when true
-int testwait = 0;  // lock on test
-int connectwait = 0; // lock on connect
-int reportwait = 0; // lock on report
 
 std::vector<Edge> Edges; // Edges stored in struct
 
@@ -71,31 +67,22 @@ int main(int argc, char **argv) {
     start_time = MPI_Wtime();
 
     wakeup();
+    // message recieved will be of type {type,arg1,arg2,arg3};
+    // we will push the source to the message and process it locally
     while (true) {
         int flag = 0;
         MPI_Status stat;
-        MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &flag, &stat);
+        MPI_Iprobe(MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &flag, &stat);
         if (flag) {
-            process(stat);
+            int msg[4];
+            MPI_Recv(&msg, 4,MPI_INT,stat.MPI_SOURCE, 0, MPI_COMM_WORLD,MPI_STATUS_IGNORE);
+            std::vector<int> recv_msg = {msg[0],msg[1],msg[2],msg[3],stat.MPI_SOURCE};
+            process(recv_msg);
         }
         if (Q.size() > 0) {
-            std::pair<int, std::vector<int>> msg_args = Q.front();
+            std::vector<int> delayed_msg = Q.front();
             Q.pop();
-            if (msg_args.first == CONNECT) {
-                int src = msg_args.second[0];
-                int msg = msg_args.second[1];
-                handle_connect(&msg,src);
-            } 
-            else if (msg_args.first == REPORT) {
-                int src = msg_args.second[0];
-                int msg = msg_args.second[1];
-                handle_report(&msg,src);
-            } 
-            else if (msg_args.first == TEST) {
-                int src = msg_args.second[0];
-                int msg[2] = {msg_args.second[1],msg_args.second[2]};
-                handle_test(msg,src);
-            }
+            process(delayed_msg);
         }
         if (halt) {
             break;
@@ -118,38 +105,34 @@ void wakeup() {
     LN = 0;
     SN = 2;
     rec = 0;
-    connectwait = 0;
-    reportwait = 0;
-    if (!connectwait) {
-        connectwait = 1;
-        int msg = 0;
-        MPI_Request sent;
-        MPI_Isend(&msg, 1, MPI_INT, V(0), CONNECT, MPI_COMM_WORLD, &sent);
-        MPI_Wait(&sent, MPI_STATUS_IGNORE);
-    }
+    std::vector<int> send_msg = {CONNECT,0,0,0};
+    MPI_Request sent;
+    MPI_Isend(&send_msg[0], 4, MPI_INT, V(0), 0, MPI_COMM_WORLD, &sent);
+    MPI_Wait(&sent, MPI_STATUS_IGNORE);
+    print_send_msg("CONNECT",send_msg,V(0));
 }
 
-void handle_connect(int *msg,int src) {
-    int L = msg[0];
+void handle_connect(std::vector<int>& args) {
+    int L = args[1];
+    int src = args[4];
     int i = vertex_ind_map[src];
     if (L < LN) {
         T(i) = 1;
         MPI_Request sent;
-        int send[3] = {LN, FN, SN};
-        MPI_Isend(&send, 3, MPI_INT, src, INITIATE, MPI_COMM_WORLD, &sent);
+        std::vector<int> send_msg = {INITIATE,LN,FN,SN};
+        MPI_Isend(&send_msg[0], 4, MPI_INT, src, 0, MPI_COMM_WORLD, &sent);
         MPI_Wait(&sent, MPI_STATUS_IGNORE);
+        print_send_msg("INITIATE",send_msg,src);
     } 
     else if (T(i) == 0) {
-        std::vector<int> args(2);
-        args[0] = src;
-        args[1] = L;
-        Q.push({CONNECT, args});
+        Q.push(args);
     } 
     else {
         MPI_Request sent;
-        int send[3] = {LN + 1, W(i), 1};
-        MPI_Isend(&send, 3, MPI_INT, src, INITIATE, MPI_COMM_WORLD, &sent);
+        std::vector<int> send_msg = {INITIATE,LN+1,W(i),1};
+        MPI_Isend(&send_msg[0], 4, MPI_INT, src, 0, MPI_COMM_WORLD, &sent);
         MPI_Wait(&sent, MPI_STATUS_IGNORE);
+        print_send_msg("INITIATE",send_msg,src);
     }
 }
 
@@ -160,27 +143,27 @@ void report() {
             count++;
         }
     }
-    if (rec == count && test_node == -1 && !reportwait) {
-        reportwait = 1;
+    if (rec == count && test_node == -1) {
         SN = 2;
         MPI_Request sent;
-        int send = best_w;
-        MPI_Isend(&send, 1, MPI_INT, parent, REPORT, MPI_COMM_WORLD, &sent);
+        std::vector<int> send_msg = {REPORT,best_w,0,0};
+        MPI_Isend(&send_msg[0], 4, MPI_INT, parent, 0, MPI_COMM_WORLD, &sent);
         MPI_Wait(&sent, MPI_STATUS_IGNORE);
+        print_send_msg("REPORT",send_msg,parent);
     }
 }
 
 void test() {
     int flag = 0;
     for (int i = 0; i < n; ++i) {
-        if (T(i) == 0 && !testwait) {
-            testwait = 1;
+        if(T(i) == 0) {
             flag = 1;
             test_node = V(i);
             MPI_Request sent;
-            int send[2] = {LN, FN};
-            MPI_Isend(&send, 2, MPI_INT, test_node, TEST, MPI_COMM_WORLD, &sent);
+            std::vector<int> send_msg = {TEST,LN,FN,0};
+            MPI_Isend(&send_msg[0], 4, MPI_INT, test_node, 0, MPI_COMM_WORLD, &sent);
             MPI_Wait(&sent, MPI_STATUS_IGNORE);
+            print_send_msg("TEST",send_msg,test_node);
             break;
         }
     }
@@ -190,10 +173,11 @@ void test() {
     }
 }
 
-void handle_initiate(int *msg, int src) {
-    int L  = msg[0]; // new level
-    int F = msg[1];  // new fragment
-    int S = msg[2]; // new state
+void handle_initiate(std::vector<int>& args) {
+    int L  = args[1]; // new level
+    int F = args[2];  // new fragment
+    int S = args[3]; // new state
+    int src = args[4]; //sourc
     LN = L;
     FN = F;
     SN = S;
@@ -202,15 +186,13 @@ void handle_initiate(int *msg, int src) {
     best_w = INF;
     test_node = -1;
 
-    connectwait = 0;
-    reportwait = 0;
-
     for (int i = 0; i < n; ++i) {
         if (T(i) == 1 && V(i) != parent) {
             MPI_Request sent;
-            int send[3] = {LN, FN, SN};
-            MPI_Isend(&send, 3, MPI_INT, V(i), INITIATE, MPI_COMM_WORLD, &sent);
+            std::vector<int> send_msg = {INITIATE,LN,FN,SN};
+            MPI_Isend(&send_msg[0], 4, MPI_INT, V(i), 0, MPI_COMM_WORLD, &sent);
             MPI_Wait(&sent, MPI_STATUS_IGNORE);
+            print_send_msg("INITIATE",send_msg,V(i));
         }
     }
 
@@ -224,24 +206,24 @@ void changeroot() {
     int i = vertex_ind_map[best_node];
     if (T(i) == 1) {
         MPI_Request sent;
-        int msg = 0;
-        MPI_Isend(&msg, 1, MPI_INT, best_node, CHGROOT, MPI_COMM_WORLD, &sent);
-        MPI_Wait(&sent, MPI_STATUS_IGNORE);
+        std::vector<int> send_msg = {CHGROOT,0,0,0};
+        MPI_Isend(&send_msg[0], 4, MPI_INT, best_node, 0, MPI_COMM_WORLD, &sent);
+        MPI_Wait(&sent, MPI_STATUS_IGNORE); 
+        print_send_msg("CHGROOT",send_msg,best_node);
     } 
     else {
         T(i) = 1;
-        if (!connectwait) {
-            connectwait = 1;
-            int msg = LN;
-            MPI_Request sent;
-            MPI_Isend(&msg, 1, MPI_INT, best_node, CONNECT, MPI_COMM_WORLD, &sent);
-            MPI_Wait(&sent, MPI_STATUS_IGNORE);
-        }
+        MPI_Request sent;
+        std::vector<int> send_msg = {CONNECT,LN,0,0};
+        MPI_Isend(&send_msg[0], 4, MPI_INT, best_node, 0, MPI_COMM_WORLD, &sent);
+        MPI_Wait(&sent, MPI_STATUS_IGNORE);
+        print_send_msg("CONNECT",send_msg,best_node);
     }
 }
 
-void handle_report(int* msg,int src) {
-    int w = msg[0];
+void handle_report(std::vector<int>& args) {
+    int w = args[1];
+    int src = args[4];
     if(src != parent) {
         if (w < best_w) {
             best_w = w;
@@ -252,22 +234,20 @@ void handle_report(int* msg,int src) {
     } 
     else {
         if (SN == 1) {
-            std::vector<int> args(2);
-            args[0] = src;
-            args[1] = w;
-            Q.push({REPORT, args});
+            Q.push(args);
         } 
         else if (w > best_w) {
             changeroot();
         } 
         else if (w == best_w && best_w == INF) {
-            int msg = 1;
             halt = true;
             for (int i = 0; i < n; ++i) {
                 if (T(i) == 1) {
+                    std::vector<int> send_msg = {TERMINATE,0,0,0};
                     MPI_Request sent;
-                    MPI_Isend(&msg, 1, MPI_INT, V(i), TERMINATE, MPI_COMM_WORLD, &sent);
+                    MPI_Isend(&send_msg[0], 4, MPI_INT, V(i), 0, MPI_COMM_WORLD, &sent);
                     MPI_Wait(&sent, MPI_STATUS_IGNORE);
+                    print_send_msg("TERMINATE", send_msg,V(i));
                 }
             }
         }
@@ -275,123 +255,134 @@ void handle_report(int* msg,int src) {
     return;
 }
 
-void handle_test(int* msg,int src) {
-    int L = msg[0];
-    int F = msg[1];
+void handle_test(std::vector<int>& args) {
+    int L = args[1];
+    int F = args[2];
+    int src = args[4];
     int i = vertex_ind_map[src];
 
     if (L > LN) {
-        std::vector<int> args(3);
-        args[0] = src;
-        args[1] = L;
-        args[2] = F;
-        Q.push({TEST, args});
+        Q.push(args);
     } 
     else if (F == FN) {
         if (T(i) == 0) {
             T(i) = -1;
         }
         if (V(i) != test_node) {
-            int msg = -1;
+            std::vector<int> send_msg = {REJECT,0,0,0};
             MPI_Request sent;
-            MPI_Isend(&msg, 1, MPI_INT, src, ACCREJ, MPI_COMM_WORLD, &sent);
+            MPI_Isend(&send_msg[0], 4, MPI_INT, src, 0, MPI_COMM_WORLD, &sent);
             MPI_Wait(&sent, MPI_STATUS_IGNORE);
-        } else {
+            print_send_msg("REJECT",send_msg,src);
+        } 
+        else {
             test();
         }
     } 
     else {
-        int msg = 1;
+        std::vector<int> send_msg = {ACCEPT,0,0,0};
         MPI_Request sent;
-        MPI_Isend(&msg, 1, MPI_INT, src, ACCREJ, MPI_COMM_WORLD, &sent);
+        MPI_Isend(&send_msg[0], 4, MPI_INT, src, 0, MPI_COMM_WORLD, &sent);
         MPI_Wait(&sent, MPI_STATUS_IGNORE);
+        print_send_msg("ACCEPT",send_msg,src);
     }
 }
 
-void handle_acc_rej(int* msg,int src) {
-    int val = msg[0];
+void handle_accept(std::vector<int>& args) {
+    int src = args[4];
     int i = vertex_ind_map[src];
-    if (val == -1) {
-        if (T(i) == 0) {
-            T(i) = -1;
-        }
-        test();
-    } 
-    else {
-        test_node = -1;
-        if (W(i) < best_w) {
-            best_w = W(i);
-            best_node = src;
-        }
-        report();
+    test_node = -1;
+    if(W(i) < best_w) {
+        best_w = W(i);
+        best_node = src;
     }
+    report();
 }
 
-void handle_terminate(int* msg,int src) {
+void handle_reject(std::vector<int>& args) {
+    int src = args[4];
+    int i = vertex_ind_map[src];
+    if(T(i) == 0) {
+        T(i) = -1;
+    }
+    test();
+}
+
+
+void handle_terminate(std::vector<int>& args) {
+    halt = true;
+    int src = args[4];
     for (int i = 0; i < n; ++i) {
         if (T(i) == 1 && V(i) != src) {
             int send = 0;
+            std::vector<int> send_msg = {TERMINATE,0,0,0};
             MPI_Request sent;
-            MPI_Isend(&send, 1, MPI_INT, V(i), TERMINATE, MPI_COMM_WORLD, &sent);
+            MPI_Isend(&send_msg[0], 4, MPI_INT, V(i), 0, MPI_COMM_WORLD, &sent);
             MPI_Wait(&sent, MPI_STATUS_IGNORE);
+            print_send_msg("TERMINATE",send_msg,V(i));
         }
     }
-    halt = true;
 }
-
+// print sent messages
+void print_send_msg(std::string tag,std::vector<int>& args,int dst) {
+#ifdef DEBUG
+    std::cout <<"[" <<  MPI_Wtime() - start_time <<  "] " << get_rank() << " >> " <<  dst << " ";
+    std::cout << tag << " " << args[1] << " "<< args[2] << " "<< args[3] << "\n";
+#endif
+}
+// print recieved messages
+void print_recv_msg(std::string tag,std::vector<int>& args) {
+#ifdef DEBUG
+    std::cout <<"[" <<  MPI_Wtime() - start_time <<  "] " << get_rank() <<  " << " <<  args[4] << " ";
+    // msgtype <- type,arg1,arg2,arg3,src
+    std::cout << tag << " " << args[1] << " "<< args[2] << " "<< args[3] << "\n";
+#endif
+}
 /*
  * process the incoming messages
  * */
-void process(MPI_Status& stat) {
-    switch (stat.MPI_TAG) {
+
+void process(std::vector<int>& msg) {
+    int type = msg[0];
+    switch (type) {
         case CONNECT:{
-            int msg;
-            MPI_Status stat;
-            MPI_Recv(&msg, 1, MPI_INT, MPI_ANY_SOURCE, CONNECT, MPI_COMM_WORLD, &stat);
-            handle_connect(&msg,stat.MPI_SOURCE);
+            print_recv_msg("CONNECT",msg);
+            handle_connect(msg);
             break;
         }
         case INITIATE: {
-            int msg[3];
-            MPI_Status stat;
-            MPI_Recv(&msg, 3, MPI_INT, MPI_ANY_SOURCE, INITIATE, MPI_COMM_WORLD, &stat);
-            handle_initiate(msg,stat.MPI_SOURCE);
+            print_recv_msg("INITIATE",msg);
+            handle_initiate(msg);
             break;
         }
         case TEST: {
-            int msg[2];
-            MPI_Status stat;
-            MPI_Recv(&msg, 2, MPI_INT, MPI_ANY_SOURCE, TEST, MPI_COMM_WORLD, &stat);
-            handle_test(msg,stat.MPI_SOURCE);
+            print_recv_msg("TEST",msg);
+            handle_test(msg);
             break;
         }
-        case ACCREJ: {
-            testwait = 0;
-            int msg;
-            MPI_Status stat;
-            MPI_Recv(&msg, 1, MPI_INT, MPI_ANY_SOURCE, ACCREJ, MPI_COMM_WORLD, &stat);
-            handle_acc_rej(&msg,stat.MPI_SOURCE);
+        case ACCEPT: {
+            print_recv_msg("ACCEPT",msg);
+            handle_accept(msg);
+            break;
+        }
+        case REJECT: {
+            print_recv_msg("REJECT",msg);
+            handle_reject(msg);
             break;
         }
         case REPORT: {
-            int msg;
-            MPI_Status stat;
-            MPI_Recv(&msg, 1, MPI_INT, MPI_ANY_SOURCE, REPORT, MPI_COMM_WORLD, &stat);
-            handle_report(&msg,stat.MPI_SOURCE);
+            print_recv_msg("REPORT",msg);
+            handle_report(msg);
             break;
         }
         case CHGROOT: {
-            int msg;
-            MPI_Status stat;
-            MPI_Recv(&msg, 1, MPI_INT, MPI_ANY_SOURCE, CHGROOT, MPI_COMM_WORLD, &stat);
+            print_recv_msg("CHGROOT",msg);
             changeroot();
             break;
         }
         case TERMINATE: {
-            int msg;
-            MPI_Status stat;
-            MPI_Recv(&msg, 1, MPI_INT, MPI_ANY_SOURCE, TERMINATE, MPI_COMM_WORLD, &stat);
-            handle_terminate(&msg,stat.MPI_SOURCE);
+            print_recv_msg("TERMINATE",msg);
+            handle_terminate(msg);
             break;
         }
     }

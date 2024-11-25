@@ -14,8 +14,9 @@ const int INF = 1e5;
 #define TEST 13
 #define REPORT 14
 #define CHGROOT 15
-#define ACCREJ 16
-#define TERMINATE 17
+#define ACCEPT 16
+#define REJECT 17
+#define TERMINATE 18
 
 struct Edge {
     int v,w,type;
@@ -38,18 +39,23 @@ struct Edge {
 #define W(i) Edges[i].w
 #define V(i) Edges[i].v
 
+// print for debug
 int get_rank();
 int get_size();
-// print for debug
-void print_msg(int* msg,int msg_type);
-void process(MPI_Status& stat);
+void print_send_msg(std::string tag,std::vector<int>& msg,int dst);
+void print_recv_msg(std::string tag,std::vector<int>& msg);
+
+// process the type and send to respective handlers 
+void process(std::vector<int>& msg);
+
 // handlers to process the corresponding <messages>
-void handle_acc_rej(int* msg,int src);
-void handle_test(int* msg,int src);
-void handle_connect(int* msg,int src);
-void handle_initiate(int* msg,int src);
-void handle_terminate(int* msg,int src);
-void handle_report(int* msg,int src);
+void handle_test(std::vector<int>& args);
+void handle_connect(std::vector<int>& args);
+void handle_initiate(std::vector<int>& args);
+void handle_terminate(std::vector<int>& args);
+void handle_report(std::vector<int>& args);
+void handle_accept(std::vector<int>& args);
+void handle_reject(std::vector<int>& args);
 
 // functions
 void report();
